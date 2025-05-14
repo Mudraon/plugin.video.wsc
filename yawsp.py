@@ -703,7 +703,7 @@ def series_search(params):
     
     # Show progress dialog
     progress = xbmcgui.DialogProgress()
-    progress.create('YaWSP', f'Vyhledavam serial {series_name}...')
+    progress.create('Webshare Cinema', f'Vyhledavam serial {series_name}...')
     
     try:
         # Search for the series
@@ -761,7 +761,7 @@ def series_refresh(params):
     
     # Show progress dialog
     progress = xbmcgui.DialogProgress()
-    progress.create('YaWSP', f'Aktualizuji data pro serial {series_name}...')
+    progress.create('Webshare Cinema', f'Aktualizuji data pro serial {series_name}...')
     
     try:
         # Search for the series
