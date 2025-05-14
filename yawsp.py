@@ -608,7 +608,6 @@ def loaddb(dbdir,file):
 def db(params):
     token = revalidate()
     updateListing=False
-
     dbdir = os.path.join(_profile,'db')
     if not os.path.exists(dbdir):
         link = getlink(BACKUP_DB,token)
@@ -817,6 +816,13 @@ def router(paramstring):
             series_season(params)
         elif params['action'] == 'series_refresh':
             series_refresh(params)
+        elif params['action'] == 'series_delete':
+            series_name = params['series_name']
+            xbmc.log(f"[DELETE] Seriál '{series_name}'", xbmc.LOGINFO)
+            if series_name:
+                sm = series_manager.SeriesManager(_addon, _profile)
+                sm.delete_series(series_name)
+                xbmc.executebuiltin("Container.Refresh")
         else:
             menu()
     else:

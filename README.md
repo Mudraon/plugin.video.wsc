@@ -1,4 +1,5 @@
 # Yet Another Webshare Plugin - fork
+# Webshare Cinema
 
 Kodi plugin pro přehrávání obsahu ze služby Webshare.cz
 
@@ -8,6 +9,12 @@ Kodi plugin pro přehrávání obsahu ze služby Webshare.cz
 - Přehrávání videí
 - Fronty a historie
 - Stahování souborů
+- Dohledání seriálů
+
+### WebshareCinema version 0.1.0 ###
+- Rozšířeno vyhledávání seriálů o další patterny 
+- Možnost mazat seriál přes rightClick 
+- Změna ikony ať se neplete s originálním pluginem
 
 ### Nové funkce ve verzi 0.3.0
 

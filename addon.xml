@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<addon id="plugin.video.yawsp" name="YAWsP" version="0.3.0" provider-name="cache-sk with user-extensions">
+<addon id="plugin.video.wsc" name="WebshareCinema" version="0.1.0" provider-name="cache-sk/peca2345/Mudraon">
     <requires>
         <!--import addon="xbmc.python" version="2.19.0"/-->
         <import addon="script.module.requests" version="2.18.4"/>
@@ -8,7 +8,7 @@
     <extension point="xbmc.python.pluginsource" library="main.py">
         <provides>video</provides>
     </extension>
-    <extension point="xbmc.addon.metadata">
+    <extension point="xbmc.addon.metadata" icon="resources/icon.png">
         <summary>Yet Another Webshare Plugin</summary>
         <disclaimer lang="en_GB">The plugin does not provide any content, it is only a simulation of the browser of a publicly available web site. I am not responsible for the content provided by this site.</disclaimer>
         <disclaimer lang="sk_SK">Plugin neposkytuje žiaden obsah, je to len simulácia prehliadača verejne dostupnej web stránky. Nie som zodpovedný za obsah, ktorý táto stránka poskytuje.</disclaimer>

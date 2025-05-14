@@ -27,12 +27,15 @@ except ImportError:
 
 # Regular expressions for detecting episode patterns
 EPISODE_PATTERNS = [
-    r'[Ss](\d+)[Ee](\d+)',  # S01E01 format
-    r'(\d+)x(\d+)',         # 1x01 format
-    r'[Ee]pisode\s*(\d+)',  # Episode 1 format
-    r'[Ee]p\s*(\d+)',       # Ep 1 format
-    r'[Ee](\d+)',           # E1 format
-    r'(\d+)\.\s*(\d+)'      # 1.01 format
+    r'[Ss](\d+)[xX][Ee](\d+)',     # S01xE01, S01XE01 (např. "S06xE02")
+    r'[Ss](\d+)[Ee](\d+)',         # S01E01
+    r'(\d+)[xX](\d+)',             # 1x01
+    r'[Ss]eason[\s._-]*(\d+)[\s._-]*Episode[\s._-]*(\d+)',  # Season 1 Episode 2
+    r'[Ee]pisode[\s._-]*(\d+)',    # Episode 12
+    r'[Ee]p[\s._-]*(\d+)',         # Ep 12
+    r'[Ee](\d+)',                  # E12 (pozor, může být příliš obecné)
+    r'(\d{1,2})\.(\d{2})',         # 1.01 nebo 10.03
+    r'\[(\d+)x(\d+)\]',            # [3x06]
 ]
 
 class SeriesManager:
@@ -41,6 +44,15 @@ class SeriesManager:
         self.profile = profile
         self.series_db_path = os.path.join(profile, 'series_db')
         self.ensure_db_exists()
+
+    def delete_series(self, series_name):
+        filename = series_name
+        filepath = os.path.join(self.series_db_path , filename)
+        if os.path.exists(filepath):
+            os.remove(filepath)
+            xbmc.log(f"[PLUGIN] Seriál '{series_name}' smazán ({filepath})", xbmc.LOGINFO)
+        else:
+            xbmc.log(f"[PLUGIN] Soubor nenalezen pro smazání: {filepath}", xbmc.LOGWARNING)
         
     def ensure_db_exists(self):
         """Ensure that the series database directory exists"""
@@ -51,6 +63,34 @@ class SeriesManager:
                 os.makedirs(self.series_db_path)
         except Exception as e:
             xbmc.log(f'YaWSP Series Manager: Error creating directories: {str(e)}', level=xbmc.LOGERROR)
+
+    def normalize_series_name(self, name):
+    # Odstraní extra mezery, převede na lowercase
+        name = name.strip().lower()
+        # Nahraď mezery různými oddělovači (tečka, podtržítko, pomlčka)
+        variants = [
+            name,
+            re.sub(r'\s+', '.', name),       # how.i.met.your.mother
+            re.sub(r'\s+', '_', name),       # how_i_met_your_mother
+            re.sub(r'\s+', '-', name),       # how-i-met-your-mother
+            re.sub(r'\s+', '', name),        # howimetyourmother (bez mezer)
+        ]
+        return list(dict.fromkeys(variants))  # odstraní duplicitní hodnoty
+
+    def build_fuzzy_name_queries(self, series_name):
+        normalized = self.normalize_series_name(series_name)
+        queries = []
+
+        for name in normalized:
+            queries.append(name)                                # e.g. how i met your mother
+            queries.append(f"{name} season")                    # e.g. how i met your mother season
+            queries.append(f"{name} episode")                   # e.g. how i met your mother episode
+            queries.append(f"{name} tv show")                   # e.g. how i met your mother tv show
+            queries.append(f"{name} full series")               # e.g. how i met your mother full series
+            queries.append(f"{name} s01")                       # e.g. how i met your mother s01
+            queries.append(f"{name} season 1")                  # e.g. how i met your mother season 1
+        
+        return queries
     
     def search_series(self, series_name, api_function, token):
         """Search for episodes of a series"""
@@ -60,45 +100,40 @@ class SeriesManager:
             'last_updated': xbmc.getInfoLabel('System.Date'),
             'seasons': {}
         }
-        
-        # Define search queries to try
-        search_queries = [
-            series_name,                    # exact name
-            f"{series_name} season",        # name + season
-            f"{series_name} s01",           # name + s01
-            f"{series_name} episode"        # name + episode
-        ]
-        
+
+        # Build improved search queries
+        search_queries = self.build_fuzzy_name_queries(series_name)
         all_results = []
-        
+
         # Try each search query
         for query in search_queries:
             results = self._perform_search(query, api_function, token)
-            # Add results to our collection, avoiding duplicates
             for result in results:
-                if result not in all_results and self._is_likely_episode(result['name'], series_name):
+                result['_query'] = query  # přidej ke každému výsledku info, odkud pochází
+                if result not in all_results and self._is_likely_episode(result['name'], query):
                     all_results.append(result)
-        
+
+
         # Process results and organize into seasons
         for item in all_results:
-            season_num, episode_num = self._detect_episode_info(item['name'], series_name)
+            query = item.get('_query', series_name)
+            season_num, episode_num = self._detect_episode_info(item['name'], item['_query'])
             if season_num is not None:
-                # Convert to strings for JSON compatibility
                 season_num_str = str(season_num)
                 episode_num_str = str(episode_num)
-                
+
                 if season_num_str not in series_data['seasons']:
                     series_data['seasons'][season_num_str] = {}
-                
+
                 series_data['seasons'][season_num_str][episode_num_str] = {
                     'name': item['name'],
                     'ident': item['ident'],
                     'size': item.get('size', '0')
                 }
-        
+
         # Save the series data
         self._save_series_data(series_name, series_data)
-        
+
         return series_data
     
     def _is_likely_episode(self, filename, series_name):
@@ -133,11 +168,13 @@ class SeriesManager:
             'what': search_query, 
             'category': 'video', 
             'sort': 'recent',
-            'limit': 100,  # Get a good number of results to find episodes
+            'limit': 1000,  # Get a good number of results to find episodes
             'offset': 0,
             'wst': token,
             'maybe_removed': 'true'
         })
+
+        #xbmc.log(f"{response.content}", xbmc.LOGINFO)
         
         xml = ET.fromstring(response.content)
         
@@ -263,10 +300,26 @@ def create_series_menu(series_manager, handle):
     
     # List existing series
     series_list = series_manager.get_all_series()
+    #for series in series_list:
+    #    listitem = xbmcgui.ListItem(label=series['name'])
+    #    listitem.setArt({'icon': 'DefaultFolder.png'})
+    #    xbmcplugin.addDirectoryItem(handle, get_url(action='series_detail', series_name=series['name']), listitem, True)
+
     for series in series_list:
         listitem = xbmcgui.ListItem(label=series['name'])
         listitem.setArt({'icon': 'DefaultFolder.png'})
-        xbmcplugin.addDirectoryItem(handle, get_url(action='series_detail', series_name=series['name']), listitem, True)
+
+        # URL pro otevření detailu
+        detail_url = get_url(action='series_detail', series_name=series['name'])
+
+        # URL pro smazání
+        delete_url = get_url(action='series_delete', series_name=series['filename'])
+
+        # Kontextové menu (pravé tlačítko)
+        context_menu = [("Smazat", f"RunPlugin({delete_url})")]
+        listitem.addContextMenuItems(context_menu)
+
+        xbmcplugin.addDirectoryItem(handle, detail_url, listitem, True)
     
     xbmcplugin.endOfDirectory(handle)
 
