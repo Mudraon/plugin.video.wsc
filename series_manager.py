@@ -12,6 +12,7 @@ import xbmc
 import xbmcaddon
 import xbmcgui
 import xml.etree.ElementTree as ET
+import themoviedb
 
 try:
     from urllib import urlencode
@@ -55,7 +56,7 @@ class SeriesManager:
             xbmc.log(f"[PLUGIN] Seriál '{series_name}' smazán ({filepath})", xbmc.LOGINFO)
         else:
             xbmc.log(f"[PLUGIN] Soubor nenalezen pro smazání: {filepath}", xbmc.LOGWARNING)
-        
+
     def ensure_db_exists(self):
         """Ensure that the series database directory exists"""
         try:
@@ -64,7 +65,7 @@ class SeriesManager:
             if not os.path.exists(self.series_db_path):
                 os.makedirs(self.series_db_path)
         except Exception as e:
-            xbmc.log(f'YaWSP Series Manager: Error creating directories: {str(e)}', level=xbmc.LOGERROR)
+            xbmc.log(f'WebshareCinema: Error creating directories: {str(e)}', level=xbmc.LOGERROR)
 
     def normalize_series_name(self, name):
     # Odstraní extra mezery, převede na lowercase
@@ -94,50 +95,6 @@ class SeriesManager:
         
         return queries
     
-    def search_series_old(self, series_name, api_function, token):
-        """Search for episodes of a series"""
-        # Structure to hold results
-        series_data = {
-            'name': series_name,
-            'last_updated': xbmc.getInfoLabel('System.Date'),
-            'seasons': {}
-        }
-
-        # Build improved search queries
-        search_queries = self.build_fuzzy_name_queries(series_name)
-        all_results = []
-
-        # Try each search query
-        for query in search_queries:
-            results = self._perform_search(query, api_function, token)
-            for result in results:
-                result['_query'] = query  # přidej ke každému výsledku info, odkud pochází
-                if result not in all_results and self._is_likely_episode(result['name'], query):
-                    all_results.append(result)
-
-
-        # Process results and organize into seasons
-        for item in all_results:
-            query = item.get('_query', series_name)
-            season_num, episode_num = self._detect_episode_info(item['name'], item['_query'])
-            if season_num is not None:
-                season_num_str = str(season_num)
-                episode_num_str = str(episode_num)
-
-                if season_num_str not in series_data['seasons']:
-                    series_data['seasons'][season_num_str] = {}
-
-                series_data['seasons'][season_num_str][episode_num_str] = {
-                    'name': item['name'],
-                    'ident': item['ident'],
-                    'size': item.get('size', '0')
-                }
-
-        # Save the series data
-        self._save_series_data(series_name, series_data)
-
-        return series_data
-    
     def search_series(self, series_name, api_function, token):
         """Search for episodes of a series"""
         # Structure to hold results
@@ -151,13 +108,24 @@ class SeriesManager:
         search_queries = self.build_fuzzy_name_queries(series_name)
         all_results = []
 
-        # Try each search query
+        # 1. Search with diacritics
         for query in search_queries:
             results = self._perform_search(query, api_function, token)
             for result in results:
-                result['_query'] = query  # přidej ke každému výsledku info, odkud pochází
+                result['_query'] = query
                 if result not in all_results and self._is_likely_episode(result['name'], query):
                     all_results.append(result)
+
+        # 2. Search without diacritics
+        series_name_without_diacritics = self.remove_diacritics(series_name)
+        if series_name_without_diacritics != series_name:  # Only if there were diacritics
+            search_queries_without_diacritics = self.build_fuzzy_name_queries(series_name_without_diacritics)
+            for query in search_queries_without_diacritics:
+                results = self._perform_search(query, api_function, token)
+                for result in results:
+                    result['_query'] = query
+                    if result not in all_results and self._is_likely_episode(result['name'], query):
+                        all_results.append(result)
 
         # Process results and organize into seasons and episodes
         for item in all_results:
@@ -284,7 +252,7 @@ class SeriesManager:
                 file.write(data)
                 file.close()
         except Exception as e:
-            xbmc.log(f'YaWSP Series Manager: Error saving series data: {str(e)}', level=xbmc.LOGERROR)
+            xbmc.log(f'WebshareCinema: Error saving series data: {str(e)}', level=xbmc.LOGERROR)
     
     def load_series_data(self, series_name):
         """Load series data from the database"""
@@ -304,7 +272,16 @@ class SeriesManager:
                     series_data = json.loads(data)
                 return series_data
         except Exception as e:
-            xbmc.log(f'YaWSP Series Manager: Error loading series data: {str(e)}', level=xbmc.LOGERROR)
+            xbmc.log(f'WebshareCinema: Error loading series data: {str(e)}', level=xbmc.LOGERROR)
+            return None
+        
+    def load_full_series_by_filename(self, filename):
+        path = os.path.join(self.profile, 'series_db_tmdb', filename)
+        try:
+            with open(path, 'r', encoding='utf8') as f:
+                return json.load(f)
+        except Exception as e:
+            xbmc.log(f'WebshareCinema: Error loading {filename}: {e}', xbmc.LOGERROR)
             return None
     
     def get_all_series(self):
@@ -323,7 +300,30 @@ class SeriesManager:
                         'safe_name': series_name
                     })
         except Exception as e:
-            xbmc.log(f'YaWSP Series Manager: Error listing series: {str(e)}', level=xbmc.LOGERROR)
+            xbmc.log(f'WebshareCinema: Error listing series: {str(e)}', level=xbmc.LOGERROR)
+        
+        return series_list
+    
+    def get_all_series_tmdb(self):
+        """Get a list of all saved series with basic info"""
+        series_list = []
+        
+        try:
+            path = os.path.join(self.profile, 'series_db_tmdb')
+            for filename in os.listdir(path):
+                if filename.endswith('.json'):
+                    file_path = os.path.join(path, filename)
+                    with open(file_path, 'r', encoding='utf8') as file:
+                        try:
+                            data = json.load(file)
+                            series_list.append({
+                                'name': data.get('name', 'Neznámý'),
+                                'filename': filename  # klíč pro budoucí načítání
+                            })
+                        except Exception as e:
+                            xbmc.log(f'WebshareCinema: JSON load error in {filename}: {e}', xbmc.LOGERROR)
+        except Exception as e:
+            xbmc.log(f'WebshareCinema: Error listing series: {e}', xbmc.LOGERROR)
         
         return series_list
     
@@ -332,6 +332,16 @@ class SeriesManager:
         # Replace problematic characters
         safe = re.sub(r'[^\w\-_\. ]', '_', name)
         return safe.lower().replace(' ', '_')
+    
+    def remove_diacritics(self, text):
+        """Remove diacritics from a string"""
+        import unicodedata
+
+        # Normalize the string to decompose accented characters
+        normalized_text = unicodedata.normalize('NFD', text)
+        # Keep only the base characters (remove diacritics)
+        base_text = ''.join([c for c in normalized_text if unicodedata.category(c) != 'Mn'])
+        return base_text
 
 # Utility functions for the UI layer
 def get_url(**kwargs):
@@ -339,38 +349,44 @@ def get_url(**kwargs):
     from yawsp import _url
     return '{0}?{1}'.format(_url, urlencode(kwargs, 'utf-8'))
 
-def create_series_menu(series_manager, handle):
+def create_series_menu(series_manager, handle, has_tmdb_token):
     """Create the series selection menu"""
     import xbmcplugin
     
     # Add "Search for new series" option
-    listitem = xbmcgui.ListItem(label="Hledat novy serial")
+    listitem = xbmcgui.ListItem(label="Hledat seriál")
     listitem.setArt({'icon': 'DefaultAddSource.png'})
     xbmcplugin.addDirectoryItem(handle, get_url(action='series_search'), listitem, True)
-    
+
+    # Add "Search TMDB metadata" only with token
+    if has_tmdb_token:
+        listitem = xbmcgui.ListItem(label="Hledat seriál (TMDB)")
+        listitem.setArt({'icon': 'DefaultAddSource.png'})
+        xbmcplugin.addDirectoryItem(handle, get_url(action='series_search_tmdb'), listitem, True)
+
     # List existing series
     series_list = series_manager.get_all_series()
-    #for series in series_list:
-    #    listitem = xbmcgui.ListItem(label=series['name'])
-    #    listitem.setArt({'icon': 'DefaultFolder.png'})
-    #    xbmcplugin.addDirectoryItem(handle, get_url(action='series_detail', series_name=series['name']), listitem, True)
-
     for series in series_list:
         listitem = xbmcgui.ListItem(label=series['name'])
         listitem.setArt({'icon': 'DefaultFolder.png'})
 
+        serie_name = series['name']
         # URL pro otevření detailu
-        detail_url = get_url(action='series_detail', series_name=series['name'])
-
+        detail_url = get_url(action='series_detail', series_name=serie_name)
+        # URL pro refresh
+        refresh_url = get_url(action='series_refresh', series_name=serie_name)
         # URL pro smazání
         delete_url = get_url(action='series_delete', series_name=series['filename'])
 
         # Kontextové menu (pravé tlačítko)
-        context_menu = [("Smazat", f"RunPlugin({delete_url})")]
+        context_menu = [
+            ("Aktualizovat", f"RunPlugin({refresh_url})"),
+            ("Smazat", f"RunPlugin({delete_url})")
+        ]
+
         listitem.addContextMenuItems(context_menu)
 
         xbmcplugin.addDirectoryItem(handle, detail_url, listitem, True)
-    
     xbmcplugin.endOfDirectory(handle)
 
 def create_seasons_menu(series_manager, handle, series_name):
@@ -383,14 +399,9 @@ def create_seasons_menu(series_manager, handle, series_name):
         xbmcplugin.endOfDirectory(handle, succeeded=False)
         return
     
-    # Add "Refresh series" option
-    listitem = xbmcgui.ListItem(label="Aktualizovat serial")
-    listitem.setArt({'icon': 'DefaultAddonsSearch.png'})
-    xbmcplugin.addDirectoryItem(handle, get_url(action='series_refresh', series_name=series_name), listitem, True)
-    
     # List seasons
     for season_num in sorted(series_data['seasons'].keys(), key=int):
-        season_name = f"Rada {season_num}"
+        season_name = f"Série {season_num}"
         listitem = xbmcgui.ListItem(label=season_name)
         listitem.setArt({'icon': 'DefaultFolder.png'})
         xbmcplugin.addDirectoryItem(handle, get_url(action='series_season', series_name=series_name, season=season_num), listitem, True)
@@ -428,19 +439,31 @@ def create_episodes_menu(series_manager, handle, series_name, season_num):
         
         # Nyní přidáme všechny soubory této epizody seřazené podle preferované přípony a velikosti
         for episode in episode_list_sorted:
-            episode_size_mb = round(float(episode['size']) / (1024 * 1024), 2)
-            episode_file_name = f"Epizoda {episode_num} - {episode['name']} [{episode_size_mb} MB]"
+            #episode_size_mb = round(float(episode['size']) / (1024 * 1024), 2)
+            #episode_file_name = f"Epizoda {episode_num} - {episode['name']} [{episode_size_mb} MB]"
+            episode_file_name = f"Epizoda {episode_num} - {episode['name']}"
             
             # Vytvoříme položku pro každý soubor epizody
             file_listitem = xbmcgui.ListItem(label=episode_file_name)
+            file_listitem.setInfo('video', { 'size': int(episode['size'])})
             file_listitem.setArt({'icon': 'DefaultVideo.png'})
             file_listitem.setProperty('IsPlayable', 'true')
+
+            # URL pro otevření detailu
+            info_url = get_url(action='info', ident=episode['ident'])
+
+            # Kontextové menu (pravé tlačítko)
+            context_menu = [ ("Informace o souboru", f"RunPlugin({info_url})") ]
+
+            file_listitem.addContextMenuItems(context_menu)
 
             # Generování URL pro přehrání souboru
             file_url = get_url(action='play', ident=episode['ident'], name=episode['name'])
 
             # Přidání souboru do menu pod epizodou
             xbmcplugin.addDirectoryItem(handle, file_url, file_listitem, False)
+
+    xbmcplugin.setContent(handle, 'episodes')  # nebo 'videos'
 
     xbmcplugin.endOfDirectory(handle)
 
@@ -449,71 +472,3 @@ def get_file_type(file_name):
     """Vrátí typ souboru podle přípony (např. 'mkv', 'mp4')"""
     _, extension = os.path.splitext(file_name)  # Získá příponu souboru
     return extension.lower().strip('.')  # Vrátí příponu bez tečky a v malých písmenkách
-
-def create_episodes_menu_v2(series_manager, handle, series_name, season_num):
-    """Create menu of episodes for a season, handling multiple files per episode"""
-    import xbmcplugin, xbmcgui
-    
-    # Load series data
-    series_data = series_manager.load_series_data(series_name)
-    if not series_data or str(season_num) not in series_data['seasons']:
-        xbmcgui.Dialog().notification('Webshare Cinema', 'Data sezony nenalezena', xbmcgui.NOTIFICATION_WARNING)
-        xbmcplugin.endOfDirectory(handle, succeeded=False)
-        return
-    
-    # Convert season_num to a string for dict lookup if it's not already
-    season_num = str(season_num)
-    
-    # List episodes
-    season = series_data['seasons'][season_num]
-    for episode_num in sorted(season.keys(), key=int):
-        episode_list = season[episode_num]
-        
-        # Loop through all available files for this episode
-        for episode in episode_list:
-            episode_size_mb = round(float(episode['size']) / (1024 * 1024), 2)
-            episode_name = f"Epizoda {episode_num} - {episode['name']} [{episode_size_mb} MB]"
-
-            # Create a list item for each file of this episode
-            listitem = xbmcgui.ListItem(label=episode_name)
-            listitem.setArt({'icon': 'DefaultVideo.png'})
-            listitem.setProperty('IsPlayable', 'true')
-            
-            # Generate URL for playing this episode (or file)
-            url = get_url(action='play', ident=episode['ident'], name=episode['name'])
-            
-            # Add the directory item to the Kodi menu
-            xbmcplugin.addDirectoryItem(handle, url, listitem, False)
-    
-    # End the directory and return control to Kodi
-    xbmcplugin.endOfDirectory(handle)
-
-def create_episodes_menu_old(series_manager, handle, series_name, season_num):
-    """Create menu of episodes for a season"""
-    import xbmcplugin
-    
-    series_data = series_manager.load_series_data(series_name)
-    if not series_data or str(season_num) not in series_data['seasons']:
-        xbmcgui.Dialog().notification('Webshare Cinema', 'Data sezony nenalezena', xbmcgui.NOTIFICATION_WARNING)
-        xbmcplugin.endOfDirectory(handle, succeeded=False)
-        return
-    
-    # Convert season_num to a string for dict lookup if it's not already
-    season_num = str(season_num)
-    
-    # List episodes
-    season = series_data['seasons'][season_num]
-    for episode_num in sorted(season.keys(), key=int):
-        episode = season[episode_num]
-        episode_name = f"Epizoda {episode_num} - {episode['name']}"
-        
-        listitem = xbmcgui.ListItem(label=episode_name)
-        listitem.setArt({'icon': 'DefaultVideo.png'})
-        listitem.setProperty('IsPlayable', 'true')
-        
-        # Generate URL for playing this episode
-        url = get_url(action='play', ident=episode['ident'], name=episode['name'])
-        
-        xbmcplugin.addDirectoryItem(handle, url, listitem, False)
-    
-    xbmcplugin.endOfDirectory(handle) 

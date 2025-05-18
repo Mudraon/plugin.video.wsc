@@ -23,6 +23,7 @@ import re
 import zipfile
 import uuid
 import series_manager
+import themoviedb
 
 try:
     from urllib import urlencode
@@ -457,6 +458,7 @@ def getinfo(ident,wst):
         return None
 
 def info(params):
+    xbmc.log(f'PARAMS: {params}', level=xbmc.LOGINFO)
     token = revalidate()
     xml = getinfo(params['ident'],token)
     
@@ -493,6 +495,7 @@ def info(params):
                 text += infonize(stream,'bitrate', lambda x:sizelize(x,['bps','Kbps','Mbps','Gbps']), prefix=', ', showkey=False, suffix='')
                 text += '\n'
         text += infonize(info, 'removed', lambda x:'Yes' if x=='1' else 'No')
+        xbmc.log(f'PARAMS: {params}', level=xbmc.LOGDEBUG)
         xbmcgui.Dialog().textviewer(_addon.getAddonInfo('name'), text)
 
 def getlink(ident,wst,dtype='video_stream'):
@@ -652,29 +655,35 @@ def db(params):
 
 def menu():
     revalidate()
+
+    # Search
     xbmcplugin.setPluginCategory(_handle, _addon.getAddonInfo('name'))
     listitem = xbmcgui.ListItem(label=_addon.getLocalizedString(30201))
     listitem.setArt({'icon': 'DefaultAddonsSearch.png'})
     xbmcplugin.addDirectoryItem(_handle, get_url(action='search'), listitem, True)
+
+    # Series
+    listitem = xbmcgui.ListItem(label='Seriály')
+    listitem.setArt({'icon': 'DefaultTVShows.png'})
+    xbmcplugin.addDirectoryItem(_handle, get_url(action='series'), listitem, True)
     
+    # Download
     listitem = xbmcgui.ListItem(label=_addon.getLocalizedString(30202))
     listitem.setArt({'icon': 'DefaultPlaylist.png'})
     xbmcplugin.addDirectoryItem(_handle, get_url(action='queue'), listitem, True)
     
+    # History
     listitem = xbmcgui.ListItem(label=_addon.getLocalizedString(30203))
     listitem.setArt({'icon': 'DefaultAddonsUpdates.png'})
     xbmcplugin.addDirectoryItem(_handle, get_url(action='history'), listitem, True)
     
-    # Add Series Manager menu item
-    listitem = xbmcgui.ListItem(label='Serialy')
-    listitem.setArt({'icon': 'DefaultTVShows.png'})
-    xbmcplugin.addDirectoryItem(_handle, get_url(action='series'), listitem, True)
-    
+    # YAWsP autor movie library
     if 'true' == _addon.getSetting('experimental'):
         listitem = xbmcgui.ListItem(label='Backup DB')
         listitem.setArt({'icon': 'DefaultAddonsZip.png'})
         xbmcplugin.addDirectoryItem(_handle, get_url(action='db'), listitem, True)
 
+    # Settings
     listitem = xbmcgui.ListItem(label=_addon.getLocalizedString(30204))
     listitem.setArt({'icon': 'DefaultAddonService.png'})
     xbmcplugin.addDirectoryItem(_handle, get_url(action='settings'), listitem, False)
@@ -685,8 +694,31 @@ def series_menu(params):
     """Handle Series functionality"""
     # Initialize SeriesManager
     sm = series_manager.SeriesManager(_addon, _profile)
+    series_manager.create_series_menu(sm, _handle, _addon.getSetting('tmdb_token'))
+
+# TODO
+def series_search_tmdb(params):
+    """Search for a TV series on TMDB"""
+    series_name = ask(None)
+    if not series_name:
+        xbmcplugin.endOfDirectory(_handle, succeeded=False)
+        return
     
-    series_manager.create_series_menu(sm, _handle)
+    tmdb = themoviedb.TMDB(_addon, _profile)
+    selected = tmdb.FindSeries(series_name)
+
+    if not selected:
+        xbmcplugin.endOfDirectory(_handle, succeeded=False)
+        return
+    
+    progress = xbmcgui.DialogProgress()
+    progress.create("Webshare Cinema", f"Vyhledávám {selected['name']} / {selected['original_name']}")
+
+    id = tmdb.get_series_details(selected['id'])
+    result = tmdb.build_tmdb_series_structure(selected, id)
+
+    folder_path = os.path.join(_profile, themoviedb.FOLDER_NAME)
+    themoviedb.save_series_structure(result, folder_path)
 
 def series_search(params):
     """Search for a TV series and organize it into seasons and episodes"""
@@ -797,6 +829,7 @@ def router(paramstring):
             history(params)
         elif params['action'] == 'settings':
             settings(params)
+            xbmc.executebuiltin("Container.Refresh")
         elif params['action'] == 'info':
             info(params)
         elif params['action'] == 'play':
@@ -810,6 +843,8 @@ def router(paramstring):
             series_menu(params)
         elif params['action'] == 'series_search':
             series_search(params)
+        elif params['action'] == 'series_search_tmdb':
+            series_search_tmdb(params)
         elif params['action'] == 'series_detail':
             series_detail(params)
         elif params['action'] == 'series_season':
@@ -818,7 +853,6 @@ def router(paramstring):
             series_refresh(params)
         elif params['action'] == 'series_delete':
             series_name = params['series_name']
-            xbmc.log(f"[DELETE] Seriál '{series_name}'", xbmc.LOGINFO)
             if series_name:
                 sm = series_manager.SeriesManager(_addon, _profile)
                 sm.delete_series(series_name)
